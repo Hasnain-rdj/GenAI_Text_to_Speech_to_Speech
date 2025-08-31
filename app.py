@@ -163,9 +163,202 @@ def check_openvoice_setup():
     
     return True, "Setup check passed"
 
+def preprocess_audio_for_cloning(audio_file):
+    """Preprocess audio file for voice cloning"""
+    try:
+        from pydub import AudioSegment
+        import os
+        
+        # Load audio
+        if audio_file.endswith('.mp3'):
+            audio = AudioSegment.from_mp3(audio_file)
+        elif audio_file.endswith('.wav'):
+            audio = AudioSegment.from_wav(audio_file)
+        elif audio_file.endswith('.m4a'):
+            audio = AudioSegment.from_file(audio_file, format="m4a")
+        else:
+            audio = AudioSegment.from_file(audio_file)
+        
+        # Convert to wav format with standard settings
+        audio = audio.set_frame_rate(16000)  # Standard sample rate for voice cloning
+        audio = audio.set_channels(1)  # Mono
+        audio = audio.set_sample_width(2)  # 16-bit
+        
+        # Create output filename
+        base_name = os.path.splitext(audio_file)[0]
+        output_file = f"{base_name}_processed.wav"
+        
+        # Export
+        audio.export(output_file, format="wav")
+        
+        return output_file
+        
+    except Exception as e:
+        st.error(f"Error preprocessing audio: {str(e)}")
+        return audio_file  # Return original if preprocessing fails
+
+def create_simple_voice_cloning_script(source_file, reference_file, output_file):
+    """Create a simplified voice cloning script that avoids VAD issues"""
+    return f'''
+import sys
+import os
+sys.path.insert(0, "OpenVoice")
+
+# Set environment
+os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ["TORCH_SHOW_CPP_STACKTRACES"] = "0"
+
+import warnings
+warnings.filterwarnings("ignore")
+
+try:
+    import torch
+    import numpy as np
+    from openvoice.api import ToneColorConverter
+    from openvoice import se_extractor
+    import librosa
+    import soundfile as sf
+    
+    def simple_clone_voice():
+        try:
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            print(f"Using device: {{device}}")
+            
+            # Initialize converter
+            ckpt_converter = "OpenVoice/checkpoints/converter"
+            config_path = f"{{ckpt_converter}}/config.json"
+            checkpoint_path = f"{{ckpt_converter}}/checkpoint.pth"
+            
+            if not os.path.exists(config_path) or not os.path.exists(checkpoint_path):
+                print("Model files not found. Please run setup first.")
+                return False
+            
+            tone_color_converter = ToneColorConverter(config_path, device=device)
+            tone_color_converter.load_ckpt(checkpoint_path)
+            
+            print("Loading audio files...")
+            # Load audio with librosa (more reliable)
+            source_audio, sr = librosa.load("{source_file}", sr=None)
+            ref_audio, ref_sr = librosa.load("{reference_file}", sr=None)
+            
+            # Resample to 16kHz if needed
+            if sr != 16000:
+                source_audio = librosa.resample(source_audio, orig_sr=sr, target_sr=16000)
+            if ref_sr != 16000:
+                ref_audio = librosa.resample(ref_audio, orig_sr=ref_sr, target_sr=16000)
+            
+            # Save temporary files in the correct format
+            temp_source = "temp_src_16k.wav"
+            temp_ref = "temp_ref_16k.wav"
+            sf.write(temp_source, source_audio, 16000)
+            sf.write(temp_ref, ref_audio, 16000)
+            
+            print("Extracting embeddings...")
+            # Use a simpler approach for extraction
+            try:
+                from openvoice.se_extractor import get_se_simple
+                source_se = get_se_simple(temp_source, tone_color_converter)
+                reference_se = get_se_simple(temp_ref, tone_color_converter)
+            except:
+                # Fallback to original method
+                source_se, _ = se_extractor.get_se(temp_source, tone_color_converter)
+                reference_se, _ = se_extractor.get_se(temp_ref, tone_color_converter)
+            
+            print("Converting voice...")
+            tone_color_converter.convert(
+                audio_src_path=temp_source,
+                src_se=source_se,
+                tgt_se=reference_se,
+                output_path="{output_file}",
+                message="Simple voice cloning"
+            )
+            
+            # Cleanup
+            if os.path.exists(temp_source):
+                os.remove(temp_source)
+            if os.path.exists(temp_ref):
+                os.remove(temp_ref)
+            
+            print("Voice cloning completed successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"Error in voice cloning: {{e}}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    # Run the cloning
+    if simple_clone_voice():
+        print("SUCCESS")
+    else:
+        print("FAILED")
+        
+except ImportError as e:
+    print(f"Import error: {{e}}")
+    print("Please make sure all dependencies are installed")
+except Exception as e:
+    print(f"Unexpected error: {{e}}")
+'''
+
 def run_openvoice_cloning(source_file, reference_file):
+    """Run OpenVoice V2 voice cloning with improved error handling"""
+    try:
+        # Preprocess audio files
+        with st.spinner("Preprocessing audio files..."):
+            processed_source = preprocess_audio_for_cloning(source_file)
+            processed_reference = preprocess_audio_for_cloning(reference_file)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f"openvoice_cloned_{timestamp}.wav"
+        
+        # Try the simple approach first
+        script_content = create_simple_voice_cloning_script(processed_source, processed_reference, output_file)
+        
+        # Write and execute the cloning script
+        script_path = "temp_cloning.py"
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_content)
+        
+        # Set environment for Unicode handling and FFmpeg
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PATH"] = f"{os.getcwd()};{env.get('PATH', '')}"
+        env["TORCH_SHOW_CPP_STACKTRACES"] = "0"
+        
+        # Run the script
+        result = subprocess.run([PYTHON_EXE, script_path], 
+                              capture_output=True, text=True, timeout=600, env=env)
+        
+        # Clean up temp script
+        if Path(script_path).exists():
+            os.remove(script_path)
+        
+        if result.returncode == 0 and Path(output_file).exists():
+            # Clean up processed files
+            try:
+                if processed_source != source_file and Path(processed_source).exists():
+                    os.remove(processed_source)
+                if processed_reference != reference_file and Path(processed_reference).exists():
+                    os.remove(processed_reference)
+            except:
+                pass  # Ignore cleanup errors
+            
+            return output_file
+        else:
+            st.error(f"Voice cloning failed: {result.stderr}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error in voice cloning: {str(e)}")
+        return None
     """Run OpenVoice V2 voice cloning"""
     try:
+        # Preprocess audio files
+        with st.spinner("Preprocessing audio files..."):
+            processed_source = preprocess_audio_for_cloning(source_file)
+            processed_reference = preprocess_audio_for_cloning(reference_file)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = f"openvoice_cloned_{timestamp}.wav"
         
@@ -181,13 +374,28 @@ current_path = os.getcwd()
 if current_path not in os.environ.get("PATH", ""):
     os.environ["PATH"] = f"{{current_path}};{{os.environ.get('PATH', '')}}"
 
+# Fix NumPy compatibility issues
+import warnings
+warnings.filterwarnings("ignore", message=".*NumPy 1.x.*")
+warnings.filterwarnings("ignore", message=".*numpy.*")
+
 import torch
 import requests
 from pathlib import Path
+import numpy as np
+
+# Ensure NumPy compatibility
+if hasattr(np, '__version__') and np.__version__.startswith('2.'):
+    print("Warning: NumPy 2.x detected, some features may not work properly")
 
 # Import OpenVoice components
-from openvoice import se_extractor
-from openvoice.api import ToneColorConverter
+try:
+    from openvoice import se_extractor
+    from openvoice.api import ToneColorConverter
+except ImportError as e:
+    print(f"OpenVoice import error: {{e}}")
+    print("Make sure OpenVoice is properly installed")
+    sys.exit(1)
 
 def download_models():
     """Download OpenVoice models if needed"""
@@ -230,29 +438,48 @@ def clone_voice():
         if not download_models():
             return False
         
-        # Initialize converter
+        # Initialize converter with error handling
         ckpt_converter = "OpenVoice/checkpoints/converter"
-        tone_color_converter = ToneColorConverter(
-            f"{{ckpt_converter}}/config.json", 
-            device=device
-        )
-        tone_color_converter.load_ckpt(f"{{ckpt_converter}}/checkpoint.pth")
+        try:
+            tone_color_converter = ToneColorConverter(
+                f"{{ckpt_converter}}/config.json", 
+                device=device
+            )
+            tone_color_converter.load_ckpt(f"{{ckpt_converter}}/checkpoint.pth")
+        except Exception as e:
+            print(f"Error initializing tone color converter: {{e}}")
+            return False
         
-        # Extract embeddings
+        # Extract embeddings with error handling
         print("Extracting source embedding...")
-        source_se, _ = se_extractor.get_se("{source_file}", tone_color_converter)
+        try:
+            source_se, _ = se_extractor.get_se("{processed_source}", tone_color_converter)
+        except Exception as e:
+            print(f"Error extracting source embedding: {{e}}")
+            print("This might be due to audio format or VAD issues")
+            return False
         
         print("Extracting reference embedding...")
-        reference_se, _ = se_extractor.get_se("{reference_file}", tone_color_converter)
+        try:
+            reference_se, _ = se_extractor.get_se("{processed_reference}", tone_color_converter)
+        except Exception as e:
+            print(f"Error extracting reference embedding: {{e}}")
+            print("This might be due to audio format or VAD issues")
+            return False
         
         # Convert voice
-        tone_color_converter.convert(
-            audio_src_path="{source_file}",
-            src_se=source_se,
-            tgt_se=reference_se,
-            output_path="{output_file}",
-            message="OpenVoice V2 cloning"
-        )
+        print("Converting voice...")
+        try:
+            tone_color_converter.convert(
+                audio_src_path="{processed_source}",
+                src_se=source_se,
+                tgt_se=reference_se,
+                output_path="{output_file}",
+                message="OpenVoice V2 cloning"
+            )
+        except Exception as e:
+            print(f"Error during voice conversion: {{e}}")
+            return False
         
         print("Voice cloning completed!")
         return True
@@ -289,6 +516,15 @@ else:
             os.remove(script_path)
         
         if result.returncode == 0 and Path(output_file).exists():
+            # Clean up processed files
+            try:
+                if processed_source != source_file and Path(processed_source).exists():
+                    os.remove(processed_source)
+                if processed_reference != reference_file and Path(processed_reference).exists():
+                    os.remove(processed_reference)
+            except:
+                pass  # Ignore cleanup errors
+            
             return output_file
         else:
             st.error(f"Voice cloning failed: {result.stderr}")

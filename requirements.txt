@@ -7,3 +7,8 @@ librosa>=0.10.1
 soundfile>=0.12.1
 requests>=2.31.0
 ffmpeg-python>=0.2.0
+numpy<2.0
+ipdb>=0.13.0
+onnxruntime>=1.15.0
+whisper-timestamped>=1.14.0
+scipy>=1.10.0
