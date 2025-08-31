@@ -6,6 +6,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# OpenVoice repository (clone separately)
+OpenVoice/
+
 # Python compiled files
 __pycache__/
 *.py[cod]
