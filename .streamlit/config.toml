@@ -1,0 +1,17 @@
+[logger]
+level = "ERROR"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = false
+
+[server]
+enableStaticServing = false
+enableCORS = true
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+magicEnabled = false

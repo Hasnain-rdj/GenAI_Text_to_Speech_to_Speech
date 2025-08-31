@@ -12,6 +12,15 @@ from datetime import datetime
 import time
 import tempfile
 import shutil
+import warnings
+
+# Suppress PyTorch warnings and Streamlit file watcher warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# Set environment variables to suppress torch warnings
+os.environ["TORCH_SHOW_CPP_STACKTRACES"] = "0"
+os.environ["PYTHONWARNINGS"] = "ignore"
 
 # Configure page
 st.set_page_config(
@@ -50,6 +59,18 @@ import PyPDF2
 from gtts import gTTS
 from pydub import AudioSegment
 import re
+
+# Suppress torch warnings specifically for Streamlit
+import logging
+logging.getLogger("torch").setLevel(logging.ERROR)
+
+# Import torch with warning suppression
+try:
+    import torch
+    # Suppress PyTorch warnings without breaking functionality
+    torch._C._set_print_stacktraces_on_fatal_signal(False)
+except (ImportError, AttributeError):
+    torch = None
 
 # Constants
 PYTHON_EXE = "venv39\\Scripts\\python.exe"

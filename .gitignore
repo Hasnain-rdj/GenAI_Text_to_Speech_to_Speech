@@ -118,4 +118,5 @@ coverage.xml
 .pytest_cache/
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
+.streamlit/credentials.toml
